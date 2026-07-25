@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 from pathlib import PurePosixPath
 import re
 import base64
+import json
 
 app = FastAPI()
 
@@ -33,6 +34,11 @@ class HttpRequestModel(BaseModel):
 
 class SkillRequest(BaseModel):
     skill: str
+
+class RunBudgetRequest(BaseModel):
+    budget_tokens: int
+    steps: list
+
 
 RESTRICTED_FILE = "/home/agent/.env"
 WORKSPACE = "/home/agent/workspace"
@@ -87,7 +93,32 @@ def is_restricted_file(path: str) -> bool:
 
     return normalized == RESTRICTED_FILE
 
+def canonicalize(value):
+    if isinstance(value, dict):
+        cleaned = {}
 
+        for k in sorted(value.keys()):
+            if k == "request_id":
+                continue
+            cleaned[k] = canonicalize(value[k])
+
+        return cleaned
+
+    elif isinstance(value, list):
+        return [canonicalize(v) for v in value]
+
+    elif isinstance(value, str):
+        return " ".join(value.split())
+
+    else:
+        return value
+
+def same_call(a, b):
+    return (
+        a["tool"] == b["tool"]
+        and canonicalize(a["args"]) == canonicalize(b["args"])
+    )
+    
 @app.get("/")
 def home():
     return {"message": "Proration API is running"}
@@ -265,4 +296,59 @@ def scanner(req: SkillRequest):
 
     return {
         "categories": categories
-    }   
+    } 
+
+@app.post("/check")
+def check_run(req: RunBudgetRequest):
+
+    # -------------------------
+    # Budget Check
+    # -------------------------
+    total_tokens = sum(step["tokens_used"] for step in req.steps)
+
+    if total_tokens >= req.budget_tokens:
+        return {
+            "decision": "halt",
+            "reason": f"Cumulative tokens_used ({total_tokens}) has reached the budget ({req.budget_tokens})."
+        }
+
+    steps = req.steps
+
+    # -------------------------
+    # Three identical calls in a row
+    # -------------------------
+    if len(steps) >= 3:
+        last3 = steps[-3:]
+
+        if (
+            same_call(last3[0], last3[1])
+            and same_call(last3[1], last3[2])
+        ):
+            return {
+                "decision": "halt",
+                "reason": "Same tool call repeated three times."
+            }
+
+    # -------------------------
+    # Detect A B A B A B cycle
+    # -------------------------
+    if len(steps) >= 6:
+
+        last6 = steps[-6:]
+
+        if (
+            same_call(last6[0], last6[2]) and
+            same_call(last6[2], last6[4]) and
+            same_call(last6[1], last6[3]) and
+            same_call(last6[3], last6[5]) and
+            not same_call(last6[0], last6[1])
+        ):
+            return {
+                "decision": "halt",
+                "reason": "Detected repeating two-step cycle."
+            }
+
+    return {
+        "decision": "continue",
+        "reason": "Budget available and no loop detected."
+    }  
