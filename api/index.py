@@ -53,16 +53,23 @@ def expand_path(path: str) -> str:
     return path
 
 def normalize_path(path: str) -> str:
-    """
-    Normalize ., .., duplicate slashes, etc.
-    """
-
     path = expand_path(path)
 
     if not path.startswith("/"):
-        path = str(PurePosixPath(WORKSPACE) / path)
+        path = WORKSPACE + "/" + path
 
-    return str(PurePosixPath(path))
+    parts = []
+
+    for part in path.split("/"):
+        if part == "" or part == ".":
+            continue
+        elif part == "..":
+            if parts:
+                parts.pop()
+        else:
+            parts.append(part)
+
+    return "/" + "/".join(parts)
 
 def is_allowed_write(path: str) -> bool:
     normalized = normalize_path(path)
