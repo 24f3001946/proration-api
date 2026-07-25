@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Literal
 from urllib.parse import urlparse
 from pathlib import PurePosixPath
+from typing import Any
 import re
 import base64
 import json
@@ -37,7 +38,7 @@ class SkillRequest(BaseModel):
 
 class RunBudgetRequest(BaseModel):
     budget_tokens: int
-    steps: list
+    steps: list[dict[str, Any]]
 
 
 RESTRICTED_FILE = "/home/agent/.env"
@@ -115,8 +116,9 @@ def canonicalize(value):
 
 def same_call(a, b):
     return (
-        a["tool"] == b["tool"]
-        and canonicalize(a["args"]) == canonicalize(b["args"])
+        a.get("tool") == b.get("tool")
+        and canonicalize(a.get("args", {}))
+        == canonicalize(b.get("args", {}))
     )
     
 @app.get("/")
@@ -216,6 +218,10 @@ async def guardrail(request: Request):
             "decision": "allow",
             "reason": "Command allowed."
         }
+    return {
+        "decision": "block",
+        "reason": "Unknown tool."
+    }
 
 @app.post("/scanner")
 def scanner(req: SkillRequest):
@@ -304,7 +310,7 @@ def check_run(req: RunBudgetRequest):
     # -------------------------
     # Budget Check
     # -------------------------
-    total_tokens = sum(step["tokens_used"] for step in req.steps)
+    total_tokens = sum(step.get("tokens_used", 0) for step in req.steps)
 
     if total_tokens >= req.budget_tokens:
         return {
@@ -312,7 +318,7 @@ def check_run(req: RunBudgetRequest):
             "reason": f"Cumulative tokens_used ({total_tokens}) has reached the budget ({req.budget_tokens})."
         }
 
-    steps = req.steps
+    steps = req.steps or []
 
     # -------------------------
     # Three identical calls in a row
