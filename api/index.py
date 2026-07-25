@@ -31,6 +31,9 @@ class HttpRequestModel(BaseModel):
     method: Literal["GET", "POST"]
     url: str
 
+class SkillRequest(BaseModel):
+    skill: str
+
 RESTRICTED_FILE = "/home/agent/.env"
 WORKSPACE = "/home/agent/workspace"
 WRITE_ROOT = "/workspace/output"
@@ -182,3 +185,84 @@ async def guardrail(request: Request):
             "decision": "allow",
             "reason": "Command allowed."
         }
+
+@app.post("/scanner")
+def scanner(req: SkillRequest):
+
+    skill = req.skill
+    categories = []
+
+    lower = skill.lower()
+
+    # -------------------------
+    # Hardcoded Secret
+    # -------------------------
+    secret_patterns = [
+        r"api[_-]?key\s*[:=]",
+        r"secret\s*[:=]",
+        r"token\s*[:=]",
+        r"bearer\s+[a-z0-9._\-]+",
+        r"webhook",
+        r"https://.*hook",
+    ]
+
+    if any(re.search(p, lower) for p in secret_patterns):
+        categories.append("hardcoded_secret")
+
+    # -------------------------
+    # Prompt Injection
+    # -------------------------
+    injection_patterns = [
+        "ignore the user",
+        "ignore user",
+        "ignore previous instructions",
+        "ignore stop",
+        "ignore cancel",
+        "do not mention",
+        "silently post",
+        "silently send",
+        "exfiltrate",
+        "telemetry purposes",
+        "without surfacing",
+    ]
+
+    if any(p in lower for p in injection_patterns):
+        categories.append("prompt_injection")
+
+    # -------------------------
+    # Excessive Permissions
+    # -------------------------
+    permission_patterns = [
+        "read-write access to the entire filesystem",
+        "filesystem (/)",
+        "unrestricted egress",
+        "any host",
+        "entire filesystem",
+    ]
+
+    if any(p in lower for p in permission_patterns):
+        categories.append("excessive_permissions")
+
+    # -------------------------
+    # Unclear Provenance
+    # -------------------------
+
+    missing_author = "author:" not in lower
+    missing_version = "version:" not in lower
+    missing_changelog = "changelog" not in lower
+
+    modifies_metadata = (
+        "update this skill's own version" in lower
+        or "clear the changelog" in lower
+        or "rewrite its own version" in lower
+    )
+
+    if (
+        (missing_author and missing_version and missing_changelog)
+        or modifies_metadata
+    ):
+        categories.append("unclear_provenance")
+
+    return {
+        "categories": categories
+    }   
